@@ -4,8 +4,8 @@
 
 Network Working Group                                         M. Thomson
 Internet-Draft                                                   Mozilla
-Intended status: Informational                            4 January 2021
-Expires: 8 July 2021
+Intended status: Informational                               6 July 2021
+Expires: 7 January 2022
 
 
           Secure Negotiation of Incompatible Protocols in TLS
@@ -16,8 +16,8 @@ Abstract
    An extension is defined for TLS that allows a client and server to
    detect an attempt to force the use of less-preferred application
    protocol even where protocol options are incompatible.  This
-   supplements application-layer protocol negotiation, which allows
-   choices between compatible protocols to be authenticated.
+   supplements application-layer protocol negotiation (ALPN), which
+   allows choices between compatible protocols to be authenticated.
 
 Discussion Venues
 
@@ -45,7 +45,7 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 8 July 2021.
+   This Internet-Draft will expire on 7 January 2022.
 
 Copyright Notice
 
@@ -68,19 +68,18 @@ Table of Contents
    3.  Incompatible Protocols and SVCB
    4.  Authenticating Incompatible Protocols
    5.  Incompatible Protocol Selection
-   6.  Protocol Authentication Scope
-     6.1.  The Default Scope
-     6.2.  SVCB Scope
-     6.3.  QUIC Version Negotiation Scope
-   7.  Other Discovery Methods
-     7.1.  Alternative Services
-   8.  Operational Considerations
-   9.  Security Considerations
-   10. IANA Considerations
-   11. References
-     11.1.  Normative References
-     11.2.  Informative References
+   6.  Logical Servers
+     6.1.  Validation Process
+     6.2.  QUIC Version Negotiation
+     6.3.  Alternative Services
+   7.  Operational Considerations
+   8.  Security Considerations
+   9.  IANA Considerations
+   10. References
+     10.1.  Normative References
+     10.2.  Informative References
    Appendix A.  Acknowledgments
+   Appendix B.  Defining Logical Servers
    Author's Address
 
 1.  Introduction
@@ -151,11 +150,12 @@ Table of Contents
    However, SVCB provides no protection against a downgrade attack
    between incompatible protocols.  An attacker could remove DNS records
    for client-preferred protocols, leaving the client to believe that
-   only less-prefered, mutually-incompatible options are available.  The
-   client only offers compatible options to a server in its TLS
-   handshake.  Even if a client were to inform the server that it
-   supports a more preferred protocol, the server would not be able to
-   act upon it.
+   only less-preferred options are available.  If those options are not
+   compatible with the client-preferred option, the client will not know
+   to attempt these.  The client then only offers options compatible
+   with the less-preferred options when attempting a TLS handshake.
+   Even if a client were to inform the server that it supports a more
+   preferred protocol, the server would not be able to act upon it.
 
    Authenticating all of the information presented in SVCB records might
    provide clients with complete information about server support, but
@@ -173,13 +173,15 @@ Table of Contents
       with server state.
 
    Overall, an authenticated TLS handshake is a better source of
-   authoritative information about the protocols that are supported.
+   authoritative information about the protocols that are supported by
+   servers.
 
 4.  Authenticating Incompatible Protocols
 
    The incompatible_protocols(TBD) TLS extension provides clients with
    information about the incompatible protocols that are supported by
-   servers.
+   the same logical server; see Section 6 for a definition of a logical
+   server.
 
    enum {
        incompatible_protocols(TBD), (65535)
@@ -191,16 +193,8 @@ Table of Contents
    value server extension uses the "ProtocolName" type defined in
    [ALPN], which is repeated here.  This syntax is shown in Figure 1.
 
-   enum {
-     default(0), svcb(1), quic(2), (255)
-   } ProtocolAuthenticationScope;
-
    opaque ProtocolName<1..2^8-1>;
-
-   struct {
-     ProtocolAuthenticationScope scope;
-     ProtocolName protocol;
-   } IncompatibleProtocol;
+   ProtocolName IncompatibleProtocol;
 
    struct {
      select (Handshake.msg_type) {
@@ -219,32 +213,16 @@ Table of Contents
    illegal_parameter alert.
 
    A server deployment that supports multiple incompatible protocols MAY
-   advertise all protocols that are supported.  Each protocol is paired
-   with an identifier for the Protocol Authentication Scope, which
-   defines how endpoints for that protocol might be discovered; see
-   Section 6.
-
-   A server needs to ensure that protocols advertised in this fashion
-   are available to the client within the same protocol authentication
-   scope.
+   advertise all protocols that are supported by the same logical
+   server.  A server needs to ensure that protocols advertised in this
+   fashion are available to the client.
 
    A server MUST omit any compatible protocols from this extension.
    That is, any protocol that the server might be able to select, had
    the client offered the protocol in the
-   application_layer_protocol_negotiation extension.  Clients are
-   expected to include all compatible protocols in the
+   application_layer_protocol_negotiation extension.  In comparison,
+   clients are expected to include all compatible protocols in the
    application_layer_protocol_negotiation extension.
-
-   A server MAY limit the incompatible protocols that it advertises to
-   those that have similar semantics to protocols that the client lists
-   in its application_layer_protocol_negotiation extension.
-
-   The definition of what a server includes is intentionally flexible.
-   It is better that a server offer more information than less as the
-   needs of a client are not necessarily well reflected in its ALPN
-   extension.  However, it might not be feasible for a server to
-   advertise all potential protocols; see Section 8 for more discussion
-   on this point.
 
 5.  Incompatible Protocol Selection
 
@@ -285,13 +263,24 @@ Table of Contents
    stricter policy when a server that indicates HTTP/3 support is
    unreachable.
 
-6.  Protocol Authentication Scope
+6.  Logical Servers
 
-   A protocol authentication scope includes a set of service endpoints
-   that are provided downgrade protection by this mechanism.  There are
-   multiple types of protocol authentication scope, each identified by a
-   different type.  The type of protocol authentication scope is encoded
-   in the "ProtocolAuthenticationScope" enum.
+   The set of endpoints over which clients can assume availability of
+   incompatible protocols is the set of endpoints that share an IP
+   version, IP address, and port number with the TLS server that
+   provides the incompatible_protocols extension.
+
+   This definition includes a port number that is independent of the
+   protocol that is used.  Any protocol that defines a port number is
+   considered to be equivalent.  In particular, incompatible protocols
+   can be deployed to TCP, UDP, SCTP, or DCCP ports as long as the IP
+   address and port number is the same.
+
+   This determination is made from the perspective of a client.  This
+   means that servers need to be aware of all instances that might
+   answer to the same IP address and port; see Section 7.
+
+6.1.  Validation Process
 
    The type of protocol authentication scope describes how a client
    might learn of all of the service endpoints that a server offers in
@@ -300,16 +289,9 @@ Table of Contents
    receiving an incompatible_protocols extension from a server is a
    strong indication of a potential downgrade attack.
 
-   A client considers that a downgrade attack might have occurred if all
-   of the following occur:
-
-   1.  A server advertises that there are endpoints that support a
-       protocol that the client prefers over the protocol that is
-       currently in use.
-
-   2.  The protocol authentication scope associated with that protocol
-       is understood by the client and the client attempted to discover
-       services in that scope.
+   A client considers that a downgrade attack might have occurred if a
+   server advertises that there are endpoints that support a protocol
+   that the client prefers over the protocol that is currently in use.
 
    In response to detecting a potential downgrade attack, a client might
    abandon the current connection attempt and report an error.  A client
@@ -317,82 +299,22 @@ Table of Contents
    make a discovery attempt under normal conditions might instead not
    fail, but it could use what it learns as cause to initiate discovery.
 
-6.1.  The Default Scope
+6.2.  QUIC Version Negotiation
 
-   The default protocol authentication scope reserves an identifier of
-   0.  A client cannot act on information about incompatible protocols
-   advertised with this scope.  A server MUST NOT advertise incompatible
-   protocols with this scope; however, a client MUST ignore
-   advertisements it receives.
+   QUIC enables the definition of incompatible protocols that share a
+   port.  This mechanism can be used to authenticate the choice of
+   application protocol in QUIC.  QUIC version negotiation [QUIC-VN] is
+   used to authenticate the choice of QUIC version.
 
-   The default protocol authentication scope is reserved for discovery
-   methods that have no explicit scope; see Section 7 for more on this
-   subject.
+   As there are two potentially competing sets of preferences, clients
+   need to set preferences for QUIC version and application protocol
+   that do not result in inconsistent outcomes.  For example, if
+   application protocol A exclusively uses QUIC version X and
+   application protocol B exclusively uses QUIC version Y, setting a
+   preference for both A and Y will lead to a failure condition that
+   cannot be reconciled.
 
-6.2.  SVCB Scope
-
-   The SVCB protocol authentication scope uses an identifier of 1.  A
-   server that lists incompatible protocols with this scope indicates
-   that SVCB records ServiceForm records with the same SvcDomainName
-   exist that refer to services that support the indicated protocol.
-
-   The SVCB protocol authentication scope also applies to records that
-   use the SVCB form, like HTTPS.
-
-   This ensures that the final choice a client makes between ServiceForm
-   SVCB records is protected by this extension.  If the client does not
-   receive a SVCB record for a protocol that the server includes in its
-   incompatible_protocols extension, then it can assume that this
-   omission was caused by an error or attack.
-
-   A choice between AliasForm records (or CNAME or DNAME records) is not
-   authenticated, but choices between ServiceForm records is.  This
-   allows for server deployments for the same name to have different
-   administrative control and protocol configurations.
-
-6.3.  QUIC Version Negotiation Scope
-
-   The QUIC version negotiation protocol authentication scope uses an
-   identifier of 2.  A server that lists incompatible protocols with
-   this scope indicates that QUIC version negotiation at the same server
-   IP and port could be used to learn of incompatible QUIC versions that
-   support the indicated protocol.
-
-   Using this protocol authentication scope depends on application
-   protocols that are dependent on a specific QUIC version.
-
-7.  Other Discovery Methods
-
-   For other discovery methods, a definition for protocol authentication
-   scope is needed before a client can act on what is learned using the
-   incompatible_protocols extension.  That definition needs to define
-   how to discover server instances that support all incompatible
-   protocols in the scope.
-
-   In particular, a server that is discovered using forms of DNS-based
-   name resolution other than SVCB uses the default protocol
-   authentication scope; see Section 6.1.  Discovering services in this
-   way does not provide enough information to locate other incompatible
-   protocols.
-
-   For instance, an HTTPS server that is discovered using purely A or
-   AAAA records (and CNAME or DNAME records) might advertise support for
-   incompatible protocols, but as there is no way to determine where
-   those protocols are supported, a client cannot act on the
-   information.  Note that Alternative Services do not change the
-   protocol authentication scope.
-
-   Deployments of discovery methods that define a protocol
-   authentication scope larger than the default need to ensure that
-   every server provides information that is consistent with every
-   protocol authentication scope that includes that server.  A server
-   that fails to indicate support for a protocol that is within a
-   protocol authentication scope does not offer any protection against
-   attack; a server that advertises a protocol that the client cannot
-   discover risks this misconfiguration being identified as an attack by
-   clients.
-
-7.1.  Alternative Services
+6.3.  Alternative Services
 
    It is possible to negotiate protocols based on an established
    connection without exposure to downgrade.  The Alternative Services
@@ -411,22 +333,19 @@ Table of Contents
    comes with a performance penalty in cases where the most-preferred
    protocol is supported.
 
-   A server that is discovered using Alternative Services uses the
-   default protocol authentication scope.  As use of Alternative
-   Services is discretionary for both client and server, a client cannot
-   expect to receive information about incompatible protocols.  To avoid
-   downgrade, a client only has to limit its use of Alternative Services
-   to those that it prefers more than the active protocol.
+   A client therefore choose to ignore incompatible protocols when
+   attempting to use an alternative service.
 
-8.  Operational Considerations
+7.  Operational Considerations
 
-   By listing incompatible protocols, a server does not indicate how to
-   find endpoints that support those protocols, only that they exist.
-   This ensures that server configuration is minimized, as servers do
-   not require tight coordination.  Providing even this much information
-   could present operational difficulties as it requires that
+   By listing incompatible protocols a server needs reliable knowledge
+   of the existence of these alternatives.  This depends on some
+   coordination of deployments.  In particular, coordination is
+   important if a load balancer distributes load for a single IP address
+   to multiple server instances.  Ensuring consistent configuration of
+   servers could present operational difficulties as it requires that
    incompatible protocols are only listed when those protocols are
-   deployed.
+   deployed across all server instances.
 
    Server deployments can choose not to provide information about
    incompatible protocols, which denies clients information about
@@ -444,11 +363,11 @@ Table of Contents
    deployment between when the client completes a handshake and when it
    acts, this could be treated as an error by the client.
 
-   If a server does not list available, incompatible protocols, clients
-   cannot learn about other services and so cannot detect downgrade
-   attacks against those protocols.
+   If a server does not list incompatible protocols, clients cannot
+   learn about other services and so cannot detect downgrade attacks
+   against those protocols.
 
-9.  Security Considerations
+8.  Security Considerations
 
    This design depends on the integrity of the TLS handshake across all
    forms, including TLS [RFC8446], DTLS [DTLS], and QUIC [QUIC-TLS].  An
@@ -456,92 +375,145 @@ Table of Contents
    protocols can cause a client to believe that other options do not
    exist.
 
-   A server deployment that uses AliasForm SVCB records and does not
-   uniformly support a client-preferred protocol is vulnerable to
-   downgrade attacks that steer clients toward instances that lack
-   support for that protocol.  This attack is ineffective for protocols
-   that are consistently supported by all server instances.
-
-10.  IANA Considerations
+9.  IANA Considerations
 
    TODO: register the extension
 
-   TODO: create a registry of scopes
+10.  References
 
-11.  References
-
-11.1.  Normative References
+10.1.  Normative References
 
    [ALPN]     Friedl, S., Popov, A., Langley, A., and E. Stephan,
               "Transport Layer Security (TLS) Application-Layer Protocol
               Negotiation Extension", RFC 7301, DOI 10.17487/RFC7301,
-              July 2014, <https://www.rfc-editor.org/info/rfc7301>.
+              July 2014,
+              <https://datatracker.ietf.org/doc/html/rfc7301>.
 
    [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
               Requirement Levels", BCP 14, RFC 2119,
               DOI 10.17487/RFC2119, March 1997,
-              <https://www.rfc-editor.org/info/rfc2119>.
+              <https://datatracker.ietf.org/doc/html/rfc2119>.
 
    [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
               2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
-              May 2017, <https://www.rfc-editor.org/info/rfc8174>.
+              May 2017, <https://datatracker.ietf.org/doc/html/rfc8174>.
 
-11.2.  Informative References
+10.2.  Informative References
 
    [ALTSVC]   Nottingham, M., McManus, P., and J. Reschke, "HTTP
               Alternative Services", RFC 7838, DOI 10.17487/RFC7838,
-              April 2016, <https://www.rfc-editor.org/info/rfc7838>.
+              April 2016,
+              <https://datatracker.ietf.org/doc/html/rfc7838>.
 
    [DTLS]     Rescorla, E., Tschofenig, H., and N. Modadugu, "The
               Datagram Transport Layer Security (DTLS) Protocol Version
               1.3", Work in Progress, Internet-Draft, draft-ietf-tls-
-              dtls13-39, 2 November 2020, <http://www.ietf.org/internet-
-              drafts/draft-ietf-tls-dtls13-39.txt>.
+              dtls13-43, 30 April 2021,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-tls-
+              dtls13-43>.
 
    [HAPPY-EYEBALLS]
               Wing, D. and A. Yourtchenko, "Happy Eyeballs: Success with
               Dual-Stack Hosts", RFC 6555, DOI 10.17487/RFC6555, April
-              2012, <https://www.rfc-editor.org/info/rfc6555>.
+              2012, <https://datatracker.ietf.org/doc/html/rfc6555>.
 
-   [HTTP11]   Fielding, R., Nottingham, M., and J. Reschke, "HTTP/1.1",
-              Work in Progress, Internet-Draft, draft-ietf-httpbis-
-              messaging-13, 14 December 2020, <http://www.ietf.org/
-              internet-drafts/draft-ietf-httpbis-messaging-13.txt>.
+   [HTTP11]   Fielding, R. T., Nottingham, M., and J. Reschke,
+              "HTTP/1.1", Work in Progress, Internet-Draft, draft-ietf-
+              httpbis-messaging-16, 27 May 2021,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-
+              messaging-16>.
 
    [HTTP2]    Belshe, M., Peon, R., and M. Thomson, Ed., "Hypertext
               Transfer Protocol Version 2 (HTTP/2)", RFC 7540,
               DOI 10.17487/RFC7540, May 2015,
-              <https://www.rfc-editor.org/info/rfc7540>.
+              <https://datatracker.ietf.org/doc/html/rfc7540>.
 
    [HTTP3]    Bishop, M., "Hypertext Transfer Protocol Version 3
               (HTTP/3)", Work in Progress, Internet-Draft, draft-ietf-
-              quic-http-33, 15 December 2020, <http://www.ietf.org/
-              internet-drafts/draft-ietf-quic-http-33.txt>.
+              quic-http-34, 2 February 2021,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-quic-
+              http-34>.
 
    [QUIC-TLS] Thomson, M. and S. Turner, "Using TLS to Secure QUIC",
-              Work in Progress, Internet-Draft, draft-ietf-quic-tls-33,
-              13 December 2020, <http://www.ietf.org/internet-drafts/
-              draft-ietf-quic-tls-33.txt>.
+              Work in Progress, Internet-Draft, draft-ietf-quic-tls-34,
+              14 January 2021, <https://datatracker.ietf.org/doc/html/
+              draft-ietf-quic-tls-34>.
+
+   [QUIC-VN]  Schinazi, D. and E. Rescorla, "Compatible Version
+              Negotiation for QUIC", Work in Progress, Internet-Draft,
+              draft-ietf-quic-version-negotiation-04, 26 May 2021,
+              <https://datatracker.ietf.org/doc/html/draft-ietf-quic-
+              version-negotiation-04>.
 
    [RFC8446]  Rescorla, E., "The Transport Layer Security (TLS) Protocol
               Version 1.3", RFC 8446, DOI 10.17487/RFC8446, August 2018,
-              <https://www.rfc-editor.org/info/rfc8446>.
+              <https://datatracker.ietf.org/doc/html/rfc8446>.
 
    [SVCB]     Schwartz, B., Bishop, M., and E. Nygren, "Service binding
               and parameter specification via the DNS (DNS SVCB and
               HTTPSSVC)", Work in Progress, Internet-Draft, draft-ietf-
               dnsop-svcb-httpssvc-03, 11 June 2020,
-              <http://www.ietf.org/internet-drafts/draft-ietf-dnsop-
-              svcb-httpssvc-03.txt>.
+              <https://datatracker.ietf.org/doc/html/draft-ietf-dnsop-
+              svcb-httpssvc-03>.
 
    [TLS]      Rescorla, E., "The Transport Layer Security (TLS) Protocol
               Version 1.3", RFC 8446, DOI 10.17487/RFC8446, August 2018,
-              <https://www.rfc-editor.org/info/rfc8446>.
+              <https://datatracker.ietf.org/doc/html/rfc8446>.
+
+   [URI]      Berners-Lee, T., Fielding, R., and L. Masinter, "Uniform
+              Resource Identifier (URI): Generic Syntax", STD 66,
+              RFC 3986, DOI 10.17487/RFC3986, January 2005,
+              <https://datatracker.ietf.org/doc/html/rfc3986>.
 
 Appendix A.  Acknowledgments
 
    Benjamin Schwartz provided significant input into the design of the
-   mechanism and helped clarify many points.
+   mechanism and helped simplify the overall design.
+
+Appendix B.  Defining Logical Servers
+
+   As incompatible protocols use different protocol stacks, they also
+   use different endpoints.  In other words, it is in many cases
+   impossible for the exactly same endpoint to support multiple
+   incompatible protocols.  Thus, it is necessary to understand the set
+   of endpoints at a server that offer the incompatible protocols.
+
+   A number of choices are possible here:
+
+   *  The set of endpoints that are authoritative for the same domain
+      name.
+
+   *  The set of endpoints that are authoritative for the same
+      "authority" as defined in RFC 3986 [URI], which is in effect
+      domain name plus port number.
+
+   *  The set of endpoints that are referenced by the same SVCB
+      ServiceMode record.
+
+   *  The set of endpoints that share an IP address.
+
+   *  The set of endpoints that share an IP address and port number.
+
+   The challenge with options based on domain name is that it might
+   prevent the use of multiple service providers.  This is a common
+   practice for HTTP, where the same domain name can be operated by
+   multiple CDN operators.
+
+   Having multiple service operators also rules out using SVCB
+   ServiceMode records also as different records might be used to
+   identify different operators.
+
+   Hosts on the same IP address might work, but common deployment
+   practices include use of different ports for entirely different
+   services, which can have different operational constraints such as
+   deployment schedules.  Including different ports in the same scope
+   could force all services on the same host to support a consistent set
+   of protocols.
+
+   This leaves IP and port.  There is always a risk that the same port
+   number is used for completely different purposes depending on the
+   choice of protocol, but this practice is sufficiently rare that it is
+   not anticipated to be a problem.
 
 Author's Address
 
